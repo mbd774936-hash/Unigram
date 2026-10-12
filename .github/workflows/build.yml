@@ -51,6 +51,18 @@ jobs:
           & "$dest\bootstrap-vcpkg.bat"
           "VCPKG_ROOT=$dest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Install gperf
+        shell: pwsh
+        working-directory: ${{ runner.temp }}
+        run: |
+          choco install gperf -y --no-progress
+          $g = Get-Command gperf -ErrorAction SilentlyContinue
+          if (-not $g) {
+            & "$env:VCPKG_ROOT\vcpkg.exe" install gperf:x64-windows
+            $dir = Get-ChildItem -Path "$env:VCPKG_ROOT\installed\x64-windows\tools" -Recurse -Filter gperf.exe | Select-Object -First 1 -ExpandProperty DirectoryName
+            $dir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          }
+
       - name: Build TDLib
         shell: pwsh
         working-directory: Libraries/tdjson
