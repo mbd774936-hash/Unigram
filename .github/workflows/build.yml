@@ -11,6 +11,19 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Patch tgcalls jitter buffer min delay to 0
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem -Path Libraries/tgcalls -Recurse -Filter GroupInstanceCustomImpl.cpp | Select-Object -First 1
+          if (-not $f) { throw "GroupInstanceCustomImpl.cpp not found" }
+          Write-Host "File: $($f.FullName)"
+          Select-String -Path $f.FullName -Pattern "audio_jitter_buffer" | ForEach-Object { Write-Host "BEFORE: $($_.Line.Trim())" }
+          $c = Get-Content $f.FullName -Raw
+          $n = $c -replace 'audio_jitter_buffer_min_delay_ms\s*=\s*\d+', 'audio_jitter_buffer_min_delay_ms = 0'
+          if ($n -eq $c) { throw "Pattern audio_jitter_buffer_min_delay_ms not found or already 0" }
+          Set-Content -Path $f.FullName -Value $n -NoNewline
+          Select-String -Path $f.FullName -Pattern "audio_jitter_buffer" | ForEach-Object { Write-Host "AFTER: $($_.Line.Trim())" }
+
       - name: Write Constants.Secret.cs
         shell: pwsh
         env:
