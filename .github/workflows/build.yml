@@ -105,16 +105,19 @@ jobs:
             vcpkg_installed
           key: tdlib-x64-v1-${{ hashFiles('vcpkg.json', 'Libraries/tdjson/build.ps1') }}
 
+      - name: Provide td_api.tl
+        shell: pwsh
+        run: |
+          $src = Get-ChildItem -Path Libraries -Recurse -Filter td_api.tl -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '\\x64\\|\\ARM64\\' } | Sort-Object { if ($_.FullName -match 'scheme') { 0 } else { 1 } } | Select-Object -First 1
+          if (-not $src) { throw "td_api.tl not found anywhere under Libraries" }
+          Write-Host "Using $($src.FullName)"
+          New-Item -ItemType Directory -Force -Path Libraries/tdjson/x64 | Out-Null
+          Copy-Item $src.FullName Libraries/tdjson/x64/td_api.tl -Force
+
       - name: Check TDLib outputs
         shell: pwsh
         run: |
-          $out = @()
-          if (Test-Path Libraries/tdjson/x64) {
-            $out += Get-ChildItem Libraries/tdjson/x64 | ForEach-Object { "$($_.Name)  $($_.Length)" }
-          } else {
-            $out += "Libraries/tdjson/x64 MISSING"
-          }
-          $out += Get-ChildItem -Path Libraries/tdjson,Telegram -Recurse -Filter td_api.tl -ErrorAction SilentlyContinue | Select-Object -First 5 | ForEach-Object { "FOUND: $($_.FullName)  $($_.Length)" }
+          $out = Get-ChildItem Libraries/tdjson/x64 | ForEach-Object { "$($_.Name)  $($_.Length)" }
           "## TDLib outputs" | Out-File $env:GITHUB_STEP_SUMMARY -Append
           '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
           $out | Out-File $env:GITHUB_STEP_SUMMARY -Append
@@ -140,15 +143,15 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Test-Path build.log)) { "no build.log" | Out-File $env:GITHUB_STEP_SUMMARY -Append; exit 0 }
-          $errs = Select-String -Path build.log -CaseSensitive -Pattern ': error |error [A-Z]+[0-9]+:|fatal error|error LNK|error :|Build FAILED' | Select-Object -First 15 | ForEach-Object { $t = $_.Line.Trim(); if ($t.Length -gt 300) { $t.Substring(0,300) } else { $t } }
-          "## Build errors (first 15)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          $errs = Select-String -Path build.log -CaseSensitive -Pattern ': error |error [A-Z]+[0-9]+:|fatal error|error LNK|error :|Build FAILED' | Select-Object -First 12 | ForEach-Object { $t = $_.Line.Trim() -replace 'D:\\a\\Unigram\\Unigram\\','' -replace '\s*\[[^\]]*\]$',''; if ($t.Length -gt 220) { $t.Substring(0,220) } else { $t } }
+          "## Build errors (first 12)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
           '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
           $errs | Out-File $env:GITHUB_STEP_SUMMARY -Append
           '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          $gen = Select-String -Path build.log -Pattern 'CS8785|failed to generate|td_api' | Select-Object -First 12 | ForEach-Object { $t = $_.Line.Trim(); if ($t.Length -gt 500) { $t.Substring(0,500) } else { $t } }
-          "## Generator messages" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          $miss = Select-String -Path build.log -Pattern 'CS2001' | Select-Object -First 8 | ForEach-Object { if ($_.Line -match "Source file '([^']+)'") { $Matches[1] -replace 'D:\\a\\Unigram\\Unigram\\','' } else { $_.Line.Trim() } }
+          "## Missing source files (CS2001)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
           '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          $gen | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          $miss | Out-File $env:GITHUB_STEP_SUMMARY -Append
           '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
 
       - uses: actions/upload-artifact@v4
