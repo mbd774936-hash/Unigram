@@ -105,23 +105,24 @@ jobs:
             vcpkg_installed
           key: tdlib-x64-v1-${{ hashFiles('vcpkg.json', 'Libraries/tdjson/build.ps1') }}
 
-      - name: Provide td_api.tl
+      - name: Place td_api.tl and diagnose
         shell: pwsh
         run: |
-          $src = Get-ChildItem -Path Libraries -Recurse -Filter td_api.tl -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '\\x64\\|\\ARM64\\' } | Sort-Object { if ($_.FullName -match 'scheme') { 0 } else { 1 } } | Select-Object -First 1
-          if (-not $src) { throw "td_api.tl not found anywhere under Libraries" }
-          Write-Host "Using $($src.FullName)"
-          New-Item -ItemType Directory -Force -Path Libraries/tdjson/x64 | Out-Null
-          Copy-Item $src.FullName Libraries/tdjson/x64/td_api.tl -Force
-
-      - name: Check TDLib outputs
-        shell: pwsh
-        run: |
-          $out = Get-ChildItem Libraries/tdjson/x64 | ForEach-Object { "$($_.Name)  $($_.Length)" }
-          "## TDLib outputs" | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          $out | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          $sum = $env:GITHUB_STEP_SUMMARY
+          $tl = Get-ChildItem -Path Libraries -Recurse -Filter td_api.tl -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '\\(x64|ARM64)\\' } | Select-Object -First 1
+          if (-not $tl) { throw "td_api.tl not found anywhere under Libraries" }
+          foreach ($d in 'Libraries/tdjson/x64','Libraries/tdjson') {
+            New-Item -ItemType Directory -Force -Path $d | Out-Null
+            Copy-Item $tl.FullName (Join-Path $d 'td_api.tl') -Force
+          }
+          "## Diagnostics" | Out-File $sum -Append
+          '```' | Out-File $sum -Append
+          "td_api.tl source: $($tl.FullName.Replace($PWD.Path,''))" | Out-File $sum -Append
+          "--- csproj lines ---" | Out-File $sum -Append
+          Select-String -Path Telegram/Telegram.csproj -Pattern 'td_api|Generators|AdditionalFiles|Analyzer|TdApi|tdjson' | Select-Object -First 25 | ForEach-Object { $t = $_.Line.Trim(); if ($t.Length -gt 200) { $t = $t.Substring(0,200) }; "$($_.LineNumber): $t" } | Out-File $sum -Append
+          "--- Telegram.Generators files ---" | Out-File $sum -Append
+          if (Test-Path Telegram.Generators) { Get-ChildItem Telegram.Generators -Recurse -File | Where-Object { $_.FullName -notmatch '\\(obj|bin)\\' } | Select-Object -First 20 | ForEach-Object { $_.FullName.Replace($PWD.Path,'') } | Out-File $sum -Append } else { "folder missing" | Out-File $sum -Append }
+          '```' | Out-File $sum -Append
 
       - name: Restore NuGet packages (msbuild)
         shell: pwsh
