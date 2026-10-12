@@ -51,7 +51,17 @@ jobs:
           & "$dest\bootstrap-vcpkg.bat"
           "VCPKG_ROOT=$dest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Restore TDLib cache
+        id: tdcache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            Libraries/tdjson/x64
+            vcpkg_installed
+          key: tdlib-x64-v1-${{ hashFiles('vcpkg.json', 'Libraries/tdjson/build.ps1') }}
+
       - name: Install gperf
+        if: steps.tdcache.outputs.cache-hit != 'true'
         shell: pwsh
         working-directory: ${{ runner.temp }}
         run: |
@@ -64,9 +74,23 @@ jobs:
           }
 
       - name: Build TDLib
+        if: steps.tdcache.outputs.cache-hit != 'true'
         shell: pwsh
         working-directory: Libraries/tdjson
         run: powershell -ExecutionPolicy ByPass ./build.ps1 -arch x64
+
+      - name: Save TDLib cache
+        if: steps.tdcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            Libraries/tdjson/x64
+            vcpkg_installed
+          key: tdlib-x64-v1-${{ hashFiles('vcpkg.json', 'Libraries/tdjson/build.ps1') }}
+
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: msbuild Telegram.slnx /t:Restore /p:Configuration=Release /p:Platform=x64
 
       - name: Build Unigram
         shell: pwsh
