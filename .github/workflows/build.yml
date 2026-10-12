@@ -56,6 +56,10 @@ jobs:
 
       - uses: microsoft/setup-msbuild@v2
 
+      - uses: nuget/setup-nuget@v2
+        with:
+          nuget-version: latest
+
       - name: Get vcpkg
         shell: pwsh
         run: |
@@ -101,9 +105,14 @@ jobs:
             vcpkg_installed
           key: tdlib-x64-v1-${{ hashFiles('vcpkg.json', 'Libraries/tdjson/build.ps1') }}
 
-      - name: Restore NuGet packages
+      - name: Restore NuGet packages (msbuild)
         shell: pwsh
-        run: msbuild Telegram.slnx /t:Restore /p:Configuration=Release /p:Platform=x64
+        run: msbuild Telegram.slnx /t:Restore /p:RestorePackagesConfig=true /p:Configuration=Release /p:Platform=x64
+
+      - name: Restore NuGet packages (nuget.exe fallback)
+        continue-on-error: true
+        shell: pwsh
+        run: nuget restore Telegram.slnx
 
       - name: Build Unigram
         shell: pwsh
