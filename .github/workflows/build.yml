@@ -105,6 +105,21 @@ jobs:
             vcpkg_installed
           key: tdlib-x64-v1-${{ hashFiles('vcpkg.json', 'Libraries/tdjson/build.ps1') }}
 
+      - name: Check TDLib outputs
+        shell: pwsh
+        run: |
+          $out = @()
+          if (Test-Path Libraries/tdjson/x64) {
+            $out += Get-ChildItem Libraries/tdjson/x64 | ForEach-Object { "$($_.Name)  $($_.Length)" }
+          } else {
+            $out += "Libraries/tdjson/x64 MISSING"
+          }
+          $out += Get-ChildItem -Path Libraries/tdjson,Telegram -Recurse -Filter td_api.tl -ErrorAction SilentlyContinue | Select-Object -First 5 | ForEach-Object { "FOUND: $($_.FullName)  $($_.Length)" }
+          "## TDLib outputs" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          $out | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
+
       - name: Restore NuGet packages (msbuild)
         shell: pwsh
         run: msbuild Telegram.slnx /t:Restore /p:RestorePackagesConfig=true /p:Configuration=Release /p:Platform=x64
@@ -125,12 +140,16 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Test-Path build.log)) { "no build.log" | Out-File $env:GITHUB_STEP_SUMMARY -Append; exit 0 }
-          $errs = Select-String -Path build.log -CaseSensitive -Pattern ': error |error [A-Z]+[0-9]+:|fatal error|error LNK|error :|Build FAILED' | Select-Object -First 40 | ForEach-Object { $_.Line.Trim() }
-          "## Build errors (first 40)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          $errs = Select-String -Path build.log -CaseSensitive -Pattern ': error |error [A-Z]+[0-9]+:|fatal error|error LNK|error :|Build FAILED' | Select-Object -First 15 | ForEach-Object { $t = $_.Line.Trim(); if ($t.Length -gt 300) { $t.Substring(0,300) } else { $t } }
+          "## Build errors (first 15)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
           '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
           $errs | Out-File $env:GITHUB_STEP_SUMMARY -Append
           '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          $errs | ForEach-Object { Write-Host $_ }
+          $gen = Select-String -Path build.log -Pattern 'CS8785|failed to generate|td_api' | Select-Object -First 12 | ForEach-Object { $t = $_.Line.Trim(); if ($t.Length -gt 500) { $t.Substring(0,500) } else { $t } }
+          "## Generator messages" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          $gen | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
 
       - uses: actions/upload-artifact@v4
         if: always()
