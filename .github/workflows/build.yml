@@ -116,7 +116,21 @@ jobs:
 
       - name: Build Unigram
         shell: pwsh
-        run: ./Build.ps1 -arch x64
+        run: |
+          ./Build.ps1 -arch x64 *>&1 | Tee-Object -FilePath build.log
+          exit $LASTEXITCODE
+
+      - name: Show build errors
+        if: always()
+        shell: pwsh
+        run: |
+          if (-not (Test-Path build.log)) { "no build.log" | Out-File $env:GITHUB_STEP_SUMMARY -Append; exit 0 }
+          $errs = Select-String -Path build.log -CaseSensitive -Pattern ': error |error [A-Z]+[0-9]+:|fatal error|error LNK|error :|Build FAILED' | Select-Object -First 40 | ForEach-Object { $_.Line.Trim() }
+          "## Build errors (first 40)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          $errs | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          $errs | ForEach-Object { Write-Host $_ }
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -125,4 +139,5 @@ jobs:
           path: |
             Telegram.Msix/AppPackages/**
             **/*.msixbundle
+            build.log
           if-no-files-found: warn
