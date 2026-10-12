@@ -1,0 +1,70 @@
+name: build-unigram
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Write Constants.Secret.cs
+        shell: pwsh
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+        run: |
+          $code = @"
+          namespace Telegram
+          {
+              public static partial class Constants
+              {
+                  static Constants()
+                  {
+                      ApiId = $env:TG_API_ID;
+                      ApiHash = "$env:TG_API_HASH";
+                      AppChannel = "unigram";
+                  }
+              }
+          }
+          "@
+          Set-Content -Path Telegram/Constants.Secret.cs -Value $code -Encoding UTF8
+
+      - uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: latest
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Get vcpkg
+        shell: pwsh
+        run: |
+          $dest = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) "vcpkg"
+          git clone https://github.com/Microsoft/vcpkg.git $dest
+          & "$dest\bootstrap-vcpkg.bat"
+          "VCPKG_ROOT=$dest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build TDLib
+        shell: pwsh
+        working-directory: Libraries/tdjson
+        run: powershell -ExecutionPolicy ByPass ./build.ps1 -arch x64
+
+      - name: Build Unigram
+        shell: pwsh
+        run: ./Build.ps1 -arch x64
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unigram-build
+          path: |
+            Telegram.Msix/AppPackages/**
+            **/*.msixbundle
+          if-no-files-found: warn
