@@ -118,6 +118,7 @@ jobs:
           $stubDir = Join-Path $env:RUNNER_TEMP 'stubdll'
           New-Item -ItemType Directory -Force -Path $stubDir | Out-Null
           Set-Content -Path (Join-Path $stubDir 'stub.c') -Value '#include <windows.h>
+          __declspec(dllexport) int stub_dummy(void) { return 0; }
           BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p) { return TRUE; }'
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
           $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
@@ -147,40 +148,67 @@ jobs:
         shell: pwsh
         run: nuget restore Telegram.slnx
 
-      - name: Build Unigram (auto-stub missing files)
+      - name: Build Unigram (staged fallbacks)
         shell: pwsh
         run: |
-          $code = 1
-          $last = 1
-          for ($i = 1; $i -le 6; $i++) {
-            $last = $i
-            Write-Host "=== build attempt $i ==="
-            ./Build.ps1 -arch x64 *>&1 | Tee-Object -FilePath "build$i.log"
-            $code = $LASTEXITCODE
-            if ($code -eq 0) { break }
-            $missing = Select-String -Path "build$i.log" -Pattern 'error MSB3030: Could not copy the file "([^"]+)" because it was not found' -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
-            if (-not $missing) { break }
-            foreach ($m in $missing) {
-              if ([System.IO.Path]::IsPathRooted($m)) { $p = $m } else { $p = Join-Path $PWD.Path $m }
-              $p = [System.IO.Path]::GetFullPath($p)
-              Write-Host "STUB: $p"
-              New-Item -ItemType Directory -Force -Path (Split-Path $p -Parent) | Out-Null
-              if ($p -like '*.dll' -and $env:STUBDLL -and (Test-Path $env:STUBDLL)) { Copy-Item $env:STUBDLL $p -Force } else { [System.IO.File]::WriteAllBytes($p, [byte[]](0)) }
-            }
+          function Run-Msbuild([string]$log, [string[]]$extra) {
+            .\UpdateManifest.ps1 -path "Telegram.Msix\\" -config "RELEASE" -mode "SideloadOnly" | Out-Host
+            $margs = @('Telegram.slnx','/target:Telegram_Msix','/p:Configuration=Release','/p:Platform=x64','/p:UapAppxPackageBuildMode=SideloadOnly','/p:AppxBundlePlatforms=x64','/p:AppxBundle=Always','/p:AppxPackageSigningEnabled=True') + $extra
+            msbuild @margs *>&1 | Tee-Object -FilePath $log | Out-Host
+            return $LASTEXITCODE
           }
-          Copy-Item "build$last.log" build.log -Force
+
+          function Build-WithStubs([string]$tag, [string[]]$extra) {
+            $code = 1
+            for ($i = 1; $i -le 4; $i++) {
+              $log = "build_${tag}_$i.log"
+              $global:lastLog = $log
+              Write-Host "=== stage $tag attempt $i ==="
+              $code = Run-Msbuild $log $extra
+              if ($code -eq 0) { return 0 }
+              $missing = Select-String -Path $log -Pattern 'error MSB3030: Could not copy the file "([^"]+)" because it was not found' -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+              if (-not $missing) { return $code }
+              foreach ($m in $missing) {
+                if ([System.IO.Path]::IsPathRooted($m)) { $p = $m } else { $p = Join-Path $PWD.Path $m }
+                $p = [System.IO.Path]::GetFullPath($p)
+                Write-Host "STUB: $p"
+                New-Item -ItemType Directory -Force -Path (Split-Path $p -Parent) | Out-Null
+                if ($p -like '*.dll' -and $env:STUBDLL -and (Test-Path $env:STUBDLL)) { Copy-Item $env:STUBDLL $p -Force } else { [System.IO.File]::WriteAllBytes($p, [byte[]](0)) }
+              }
+            }
+            return $code
+          }
+
+          $code = Build-WithStubs 'a' @()
+          if ($code -ne 0 -and (Select-String -Path $global:lastLog -Pattern 'Internal compiler error' -Quiet)) {
+            Write-Host "=== STAGE B: invalid-bytes wallet dll ==="
+            $env:STUBDLL = ''
+            Get-ChildItem Libraries/wallet-engine/x64 -Filter *.dll -ErrorAction SilentlyContinue | ForEach-Object { [System.IO.File]::WriteAllBytes($_.FullName, [byte[]](0)) }
+            $code = Build-WithStubs 'b' @()
+          }
+          if ($code -ne 0 -and (Select-String -Path $global:lastLog -Pattern 'Internal compiler error' -Quiet)) {
+            Write-Host "=== STAGE C: without .NET Native ==="
+            $code = Build-WithStubs 'c' @('/p:UseDotNetNativeToolchain=false')
+          }
+          Copy-Item $global:lastLog build.log -Force
+          Write-Host "FINAL: exit code $code, last log $global:lastLog"
           exit $code
 
       - name: Show build errors
         if: always()
         shell: pwsh
         run: |
-          if (-not (Test-Path build.log)) { "no build.log" | Out-File $env:GITHUB_STEP_SUMMARY -Append; exit 0 }
+          $sum = $env:GITHUB_STEP_SUMMARY
+          "## Stages run" | Out-File $sum -Append
+          '```' | Out-File $sum -Append
+          (Get-ChildItem build_*.log -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', ' | Out-File $sum -Append
+          '```' | Out-File $sum -Append
+          if (-not (Test-Path build.log)) { "no build.log" | Out-File $sum -Append; exit 0 }
           $errs = Select-String -Path build.log -CaseSensitive -Pattern ': error |error [A-Z]+[0-9]+:|fatal error|error LNK|error :|Build FAILED' | Select-Object -First 12 | ForEach-Object { $t = $_.Line.Trim() -replace 'D:\\a\\Unigram\\Unigram\\','' -replace '\s*\[[^\]]*\]$',''; if ($t.Length -gt 400) { $t.Substring(0,400) } else { $t } }
-          "## Build errors (first 12)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          $errs | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          "## Build errors (first 12)" | Out-File $sum -Append
+          '```' | Out-File $sum -Append
+          $errs | Out-File $sum -Append
+          '```' | Out-File $sum -Append
 
       - uses: actions/upload-artifact@v4
         if: always()
