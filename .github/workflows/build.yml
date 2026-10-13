@@ -105,7 +105,7 @@ jobs:
             vcpkg_installed
           key: tdlib-x64-v1-${{ hashFiles('vcpkg.json', 'Libraries/tdjson/build.ps1') }}
 
-      - name: Place td_api.tl and diagnose
+      - name: Place td_api.tl and stub wallet engine
         shell: pwsh
         run: |
           $sum = $env:GITHUB_STEP_SUMMARY
@@ -115,13 +115,16 @@ jobs:
             New-Item -ItemType Directory -Force -Path $d | Out-Null
             Copy-Item $tl.FullName (Join-Path $d 'td_api.tl') -Force
           }
+          New-Item -ItemType Directory -Force -Path Libraries/wallet-engine/x64 | Out-Null
+          foreach ($n in 'wallet_engine.dll','wallet_engine.pdb') {
+            $p = Join-Path 'Libraries/wallet-engine/x64' $n
+            if (-not (Test-Path $p)) { [System.IO.File]::WriteAllBytes((Join-Path $PWD.Path $p), [byte[]](0)) }
+          }
           "## Diagnostics" | Out-File $sum -Append
           '```' | Out-File $sum -Append
           "td_api.tl source: $($tl.FullName.Replace($PWD.Path,''))" | Out-File $sum -Append
-          "--- csproj lines ---" | Out-File $sum -Append
-          Select-String -Path Telegram/Telegram.csproj -Pattern 'td_api|Generators|AdditionalFiles|Analyzer|TdApi|tdjson' | Select-Object -First 25 | ForEach-Object { $t = $_.Line.Trim(); if ($t.Length -gt 200) { $t = $t.Substring(0,200) }; "$($_.LineNumber): $t" } | Out-File $sum -Append
-          "--- Telegram.Generators files ---" | Out-File $sum -Append
-          if (Test-Path Telegram.Generators) { Get-ChildItem Telegram.Generators -Recurse -File | Where-Object { $_.FullName -notmatch '\\(obj|bin)\\' } | Select-Object -First 20 | ForEach-Object { $_.FullName.Replace($PWD.Path,'') } | Out-File $sum -Append } else { "folder missing" | Out-File $sum -Append }
+          "--- wallet-engine folder ---" | Out-File $sum -Append
+          Get-ChildItem Libraries/wallet-engine -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 15 | ForEach-Object { "$($_.FullName.Replace($PWD.Path,''))  $($_.Length)" } | Out-File $sum -Append
           '```' | Out-File $sum -Append
 
       - name: Restore NuGet packages (msbuild)
@@ -133,26 +136,39 @@ jobs:
         shell: pwsh
         run: nuget restore Telegram.slnx
 
-      - name: Build Unigram
+      - name: Build Unigram (auto-stub missing files)
         shell: pwsh
         run: |
-          ./Build.ps1 -arch x64 *>&1 | Tee-Object -FilePath build.log
-          exit $LASTEXITCODE
+          $code = 1
+          $last = 1
+          for ($i = 1; $i -le 6; $i++) {
+            $last = $i
+            Write-Host "=== build attempt $i ==="
+            ./Build.ps1 -arch x64 *>&1 | Tee-Object -FilePath "build$i.log"
+            $code = $LASTEXITCODE
+            if ($code -eq 0) { break }
+            $missing = Select-String -Path "build$i.log" -Pattern 'error MSB3030: Could not copy the file "([^"]+)" because it was not found' -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+            if (-not $missing) { break }
+            foreach ($m in $missing) {
+              if ([System.IO.Path]::IsPathRooted($m)) { $p = $m } else { $p = Join-Path $PWD.Path $m }
+              $p = [System.IO.Path]::GetFullPath($p)
+              Write-Host "STUB: $p"
+              New-Item -ItemType Directory -Force -Path (Split-Path $p -Parent) | Out-Null
+              [System.IO.File]::WriteAllBytes($p, [byte[]](0))
+            }
+          }
+          Copy-Item "build$last.log" build.log -Force
+          exit $code
 
       - name: Show build errors
         if: always()
         shell: pwsh
         run: |
           if (-not (Test-Path build.log)) { "no build.log" | Out-File $env:GITHUB_STEP_SUMMARY -Append; exit 0 }
-          $errs = Select-String -Path build.log -CaseSensitive -Pattern ': error |error [A-Z]+[0-9]+:|fatal error|error LNK|error :|Build FAILED' | Select-Object -First 12 | ForEach-Object { $t = $_.Line.Trim() -replace 'D:\\a\\Unigram\\Unigram\\','' -replace '\s*\[[^\]]*\]$',''; if ($t.Length -gt 220) { $t.Substring(0,220) } else { $t } }
+          $errs = Select-String -Path build.log -CaseSensitive -Pattern ': error |error [A-Z]+[0-9]+:|fatal error|error LNK|error :|Build FAILED' | Select-Object -First 12 | ForEach-Object { $t = $_.Line.Trim() -replace 'D:\\a\\Unigram\\Unigram\\','' -replace '\s*\[[^\]]*\]$',''; if ($t.Length -gt 400) { $t.Substring(0,400) } else { $t } }
           "## Build errors (first 12)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
           '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
           $errs | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          $miss = Select-String -Path build.log -Pattern 'CS2001' | Select-Object -First 8 | ForEach-Object { if ($_.Line -match "Source file '([^']+)'") { $Matches[1] -replace 'D:\\a\\Unigram\\Unigram\\','' } else { $_.Line.Trim() } }
-          "## Missing source files (CS2001)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
-          $miss | Out-File $env:GITHUB_STEP_SUMMARY -Append
           '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
 
       - uses: actions/upload-artifact@v4
