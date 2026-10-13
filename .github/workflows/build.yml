@@ -105,7 +105,7 @@ jobs:
             vcpkg_installed
           key: tdlib-x64-v1-${{ hashFiles('vcpkg.json', 'Libraries/tdjson/build.ps1') }}
 
-      - name: Place td_api.tl and stub wallet engine
+      - name: Place td_api.tl and build stub DLL
         shell: pwsh
         run: |
           $sum = $env:GITHUB_STEP_SUMMARY
@@ -115,16 +115,27 @@ jobs:
             New-Item -ItemType Directory -Force -Path $d | Out-Null
             Copy-Item $tl.FullName (Join-Path $d 'td_api.tl') -Force
           }
+          $stubDir = Join-Path $env:RUNNER_TEMP 'stubdll'
+          New-Item -ItemType Directory -Force -Path $stubDir | Out-Null
+          Set-Content -Path (Join-Path $stubDir 'stub.c') -Value '#include <windows.h>
+          BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p) { return TRUE; }'
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          cmd /c "`"$vcvars`" >nul && cd /d `"$stubDir`" && cl /nologo /LD /MT stub.c /Fe:stub.dll" | Out-Host
+          $stub = Join-Path $stubDir 'stub.dll'
+          $ok = Test-Path $stub
+          if ($ok) { "STUBDLL=$stub" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
           New-Item -ItemType Directory -Force -Path Libraries/wallet-engine/x64 | Out-Null
           foreach ($n in 'wallet_engine.dll','wallet_engine.pdb') {
-            $p = Join-Path 'Libraries/wallet-engine/x64' $n
-            if (-not (Test-Path $p)) { [System.IO.File]::WriteAllBytes((Join-Path $PWD.Path $p), [byte[]](0)) }
+            $p = Join-Path $PWD.Path "Libraries/wallet-engine/x64/$n"
+            if ($n -like '*.dll' -and $ok) { Copy-Item $stub $p -Force }
+            elseif (-not (Test-Path $p)) { [System.IO.File]::WriteAllBytes($p, [byte[]](0)) }
           }
           "## Diagnostics" | Out-File $sum -Append
           '```' | Out-File $sum -Append
           "td_api.tl source: $($tl.FullName.Replace($PWD.Path,''))" | Out-File $sum -Append
-          "--- wallet-engine folder ---" | Out-File $sum -Append
-          Get-ChildItem Libraries/wallet-engine -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 15 | ForEach-Object { "$($_.FullName.Replace($PWD.Path,''))  $($_.Length)" } | Out-File $sum -Append
+          "valid stub dll built: $ok" | Out-File $sum -Append
+          if ($ok) { "stub size: $((Get-Item $stub).Length)" | Out-File $sum -Append }
           '```' | Out-File $sum -Append
 
       - name: Restore NuGet packages (msbuild)
@@ -154,7 +165,7 @@ jobs:
               $p = [System.IO.Path]::GetFullPath($p)
               Write-Host "STUB: $p"
               New-Item -ItemType Directory -Force -Path (Split-Path $p -Parent) | Out-Null
-              [System.IO.File]::WriteAllBytes($p, [byte[]](0))
+              if ($p -like '*.dll' -and $env:STUBDLL -and (Test-Path $env:STUBDLL)) { Copy-Item $env:STUBDLL $p -Force } else { [System.IO.File]::WriteAllBytes($p, [byte[]](0)) }
             }
           }
           Copy-Item "build$last.log" build.log -Force
